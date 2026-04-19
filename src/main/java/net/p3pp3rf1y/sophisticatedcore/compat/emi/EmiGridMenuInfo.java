@@ -7,6 +7,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeType;
+import net.p3pp3rf1y.sophisticatedcore.common.gui.ICraftingContainer;
 import net.p3pp3rf1y.sophisticatedcore.common.gui.StorageContainerMenuBase;
 import net.p3pp3rf1y.sophisticatedcore.common.gui.UpgradeContainerBase;
 import net.p3pp3rf1y.sophisticatedcore.network.PacketDistributor;
@@ -16,41 +17,48 @@ import dev.emi.emi.api.recipe.handler.EmiCraftContext;
 import dev.emi.emi.api.recipe.handler.StandardRecipeHandler;
 import dev.emi.emi.platform.EmiClient;
 import dev.emi.emi.registry.EmiRecipeFiller;
-
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 public class EmiGridMenuInfo<T extends StorageContainerMenuBase<?>> implements StandardRecipeHandler<T> {
-	private final RecipeType<? extends Recipe<?>> recipeType;
+    private final RecipeType<? extends Recipe<?>> recipeType;
 
-	public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> crafting() {
-		return new EmiGridMenuInfo<>(RecipeType.CRAFTING);
-	}
-	public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> smithing() {
-		return new EmiGridMenuInfo<>(RecipeType.SMITHING);
-	}
-	public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> stonecutting() {
-		return new EmiGridMenuInfo<>(RecipeType.STONECUTTING);
-	}
+    public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> crafting() {
+        return new EmiGridMenuInfo<>(RecipeType.CRAFTING);
+    }
 
-	private EmiGridMenuInfo(RecipeType<? extends Recipe<?>> recipeType) {
-		this.recipeType = recipeType;
-	}
+    public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> smithing() {
+        return new EmiGridMenuInfo<>(RecipeType.SMITHING);
+    }
+
+    public static <T extends StorageContainerMenuBase<?>> EmiGridMenuInfo<T> stonecutting() {
+        return new EmiGridMenuInfo<>(RecipeType.STONECUTTING);
+    }
+
+    private EmiGridMenuInfo(RecipeType<? extends Recipe<?>> recipeType) {
+        this.recipeType = recipeType;
+    }
 
     @Override
     public List<Slot> getInputSources(T handler) {
-        List<Slot> slots = new ArrayList<>(handler.realInventorySlots);
-        handler.getOpenOrFirstCraftingContainer(recipeType).ifPresent(c -> slots.addAll(c.getRecipeSlots()));
-        return slots;
+        Optional<? extends UpgradeContainerBase<?, ?>> craftingContainer = handler.getOpenOrFirstCraftingContainer(recipeType);
+        return craftingContainer.map(craftingHandler -> {
+            List<Slot> slots = new ArrayList<>(handler.realInventorySlots.stream().filter(s -> s.mayPickup(Minecraft.getInstance().player)).toList());
+            slots.addAll(getCraftingSlots(handler));
+            return slots;
+        }).orElse(Collections.emptyList());
     }
 
     @Override
     public List<Slot> getCraftingSlots(T handler) {
-        List<Slot> slots = new ArrayList<>();
-        handler.getOpenOrFirstCraftingContainer(recipeType).ifPresent(c -> slots.addAll(c.getRecipeSlots()));
-        return slots;
+        UpgradeContainerBase<?, ?> container = handler.getOpenOrFirstCraftingContainer(recipeType).orElse(null);
+        if (container instanceof ICraftingContainer cc) {
+            return cc.getRecipeSlots();
+        }
+        return Collections.emptyList();
     }
 
     @Override
@@ -63,30 +71,27 @@ public class EmiGridMenuInfo<T extends StorageContainerMenuBase<?>> implements S
         return VanillaEmiRecipeCategories.CRAFTING.equals(recipe.getCategory()) && recipe.supportsRecipeTree();
     }
 
-	@Override
-	public boolean canCraft(EmiRecipe recipe, EmiCraftContext<T> context) {
-		return context.getScreenHandler().getOpenOrFirstCraftingContainer(recipeType).isPresent() && StandardRecipeHandler.super.canCraft(recipe, context);
-	}
+    @Override
+    public boolean canCraft(EmiRecipe recipe, EmiCraftContext<T> context) {
+        return context.getScreenHandler().getOpenOrFirstCraftingContainer(recipeType).isPresent() && StandardRecipeHandler.super.canCraft(recipe, context);
+    }
 
-	@Override
+    @Override
     public boolean craft(EmiRecipe recipe, EmiCraftContext<T> context) {
-		T container = context.getScreenHandler();
-		Optional<? extends UpgradeContainerBase<?, ?>> potentialCraftingContainer = container.getOpenOrFirstCraftingContainer(recipeType);
-
+        T container = context.getScreenHandler();
+        Optional<? extends UpgradeContainerBase<?, ?>> potentialCraftingContainer = container.getOpenOrFirstCraftingContainer(recipeType);
         List<ItemStack> stacks = EmiRecipeFiller.getStacks(this, recipe, context.getScreen(), context.getAmount());
         if (stacks != null) {
-			// Can be suppressed cause emi does a canCraft check before calling the craft method, and we test for a crafting container there
-			//noinspection OptionalGetWithoutIsPresent
-			UpgradeContainerBase<?, ?> openOrFirstCraftingContainer = potentialCraftingContainer.get();
-			if (!openOrFirstCraftingContainer.isOpen()) {
-				container.getOpenContainer().ifPresent(c -> {
-					c.setIsOpen(false);
-					container.setOpenTabId(-1);
-				});
-				openOrFirstCraftingContainer.setIsOpen(true);
-				container.setOpenTabId(openOrFirstCraftingContainer.getUpgradeContainerId());
-			}
-
+            //noinspection OptionalGetWithoutIsPresent
+            UpgradeContainerBase<?, ?> openOrFirstCraftingContainer = potentialCraftingContainer.get();
+            if (!openOrFirstCraftingContainer.isOpen()) {
+                container.getOpenContainer().ifPresent(c -> {
+                    c.setIsOpen(false);
+                    container.setOpenTabId(-1);
+                });
+                openOrFirstCraftingContainer.setIsOpen(true);
+                container.setOpenTabId(openOrFirstCraftingContainer.getUpgradeContainerId());
+            }
             Minecraft.getInstance().setScreen(context.getScreen());
             if (!EmiClient.onServer) {
                 return EmiRecipeFiller.clientFill(this, recipe, context.getScreen(), stacks, context.getDestination());
@@ -108,14 +113,14 @@ public class EmiGridMenuInfo<T extends StorageContainerMenuBase<?>> implements S
         List<Slot> crafting = handler.getCraftingSlots(recipe, screenHandler);
         Slot output = handler.getOutputSlot(screenHandler);
         PacketDistributor.sendToServer(
-				new EmiFillRecipePacket(
-						screenHandler.containerId,
-						action,
-						handler.getInputSources(screenHandler).stream().map(s -> s == null ? -1 : s.index).toList(),
-						crafting.stream().map(s -> s == null ? -1 : s.index).toList(),
-						output == null ? -1 : output.index,
-						stacks
-				)
-		);
+                new EmiFillRecipePacket(
+                        screenHandler.containerId,
+                        action,
+                        handler.getInputSources(screenHandler).stream().map(s -> s == null ? -1 : s.index).toList(),
+                        crafting.stream().map(s -> s == null ? -1 : s.index).toList(),
+                        output == null ? -1 : output.index,
+                        stacks
+                )
+        );
     }
 }
